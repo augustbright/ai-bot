@@ -2,6 +2,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import { config } from 'dotenv';
 import { OpenAIApi, Configuration } from 'openai';
 import admin from 'firebase-admin';
+import express from 'express';
 config();
 
 if (!process.env.TELEGRAM_BOT_TOKEN) {
@@ -104,4 +105,15 @@ bot.on('message', async (msg) => {
     });
 
     bot.sendMessage(chatId, answer);
+});
+
+
+const app = express();
+
+app.get('/', async (req, res) => {
+    res.send(`You don't know 🦊`);
+});
+
+app.listen(process.env.PORT || 3000, () => {
+    console.log('server started');
 });
