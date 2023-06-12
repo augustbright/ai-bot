@@ -70,7 +70,7 @@ const createPropmtMessages = async (chatId: string, newMessage): Promise<ChatCom
     });
 
     messages.push({
-        content: `Ответь так, как ответил бы безумный гений-философ на фразу: "${newMessage}?"`,
+        content: newMessage,
         role: 'user'
     });
 
