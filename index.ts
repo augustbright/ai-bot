@@ -1,6 +1,6 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { config } from 'dotenv';
-import { OpenAIApi, Configuration } from 'openai';
+import { OpenAIApi, Configuration, ChatCompletionRequestMessage } from 'openai';
 import admin from 'firebase-admin';
 import express from 'express';
 config();
@@ -14,7 +14,7 @@ if (!process.env.OPENAI_API_KEY) {
 }
 
 
-admin.initializeApp({    
+admin.initializeApp({
     credential: admin.credential.cert({
         "type": process.env.FIRE_TYPE,
         "project_id": process.env.FIRE_PROJECT_ID,
@@ -47,26 +47,34 @@ type TMessage = {
     party: 'User' | 'Bot'
 };
 
-const createPropmt = async (chatId: string) => {
+const createPropmtMessages = async (chatId: string, newMessage): Promise<ChatCompletionRequestMessage[]> => {
     const snapshot = await db.collection('chats').doc(chatId).collection('messages').orderBy("timestamp").get();
     const chatHistory = snapshot.docs.map((doc) => {
         const data = doc.data() as TMessage;
         return data;
     });
-    const zeroPrompt = `
-        Перед тобой чат, в готором Человек общается с тобой.
-        Ты - Бог.
-        Ответь так, как ответил бы Бог.
-        Ни при каких условиях не выходи из образа Бога.
-
-    `;
-
     console.log('chatHistory', chatHistory);
 
-    const textLog = chatHistory.map((message) => {
-        return `${message.party === 'Bot' ? 'Бог' : 'Человек'}: ${message.message}`;
+    const messages = chatHistory.map<ChatCompletionRequestMessage>((message) => {
+        return {
+            content: message.message,
+            role: message.party === 'User' ? 'user' : 'assistant',
+        }
+    }).slice(-10);
+
+    messages.unshift({
+        role: 'system',
+        content: `
+        Отвечай как безумный гений-философ
+        `
     });
-    return zeroPrompt + textLog.join('\n') + '\nБог:';
+
+    messages.push({
+        content: `Ответь так, как ответил бы безумный гений-философ на фразу: "${newMessage}?"`,
+        role: 'user'
+    });
+
+    return messages;
 };
 
 // Listen for any kind of message. There are different kinds of
@@ -77,32 +85,40 @@ bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     bot.sendChatAction(chatId, 'typing');
 
-    await db.collection('chats').doc(chatId.toString()).collection('messages').add({
-        message: msg.text,
-        party: 'User',
-        timestamp: admin.firestore.FieldValue.serverTimestamp()
-    });
+    const messages = await createPropmtMessages(chatId.toString(), msg.text);
+    console.log('messages', messages);
 
-    const prompt = await createPropmt(chatId.toString());
-    console.log('prompt', prompt);
+    let answer = '';
+    try {
+        const completion = await openai.createChatCompletion({
+            model: "gpt-3.5-turbo",
+            messages,
+            temperature: 2,
+            max_tokens: 2048,
+            top_p: 0.8,
+            frequency_penalty: 2,
+            presence_penalty: 0.0
+        });
+        answer = completion.data.choices[0].message.content || '';
 
-    const completion = await openai.createCompletion({
-        model: "text-davinci-003",
-        prompt,
-        temperature: 0.5,
-        max_tokens: 2048,
-        top_p: 0.3,
-        frequency_penalty: 0.5,
-        presence_penalty: 0.0
-    });
+        await db.collection('chats').doc(chatId.toString()).collection('messages').add({
+            message: msg.text,
+            party: 'User',
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });    
 
-    const answer = completion.data.choices[0].text || '';
+        await db.collection('chats').doc(chatId.toString()).collection('messages').add({
+            message: answer,
+            party: 'Bot',
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+    
+    } catch (error) {
+        answer = `Что-то пошло не так. Попробуй еще раз`;
+        console.log(error);
+    }
 
-    await db.collection('chats').doc(chatId.toString()).collection('messages').add({
-        message: answer,
-        party: 'Bot',
-        timestamp: admin.firestore.FieldValue.serverTimestamp()
-    });
+    console.log('answer', answer);
 
     bot.sendMessage(chatId, answer);
 });
